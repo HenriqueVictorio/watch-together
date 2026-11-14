@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sessão de Cinema</title>
+<style>
+  :root{--bg:#0e1015;--card:#171a22;--line:#262b38;--txt:#e8eaf0;--mut:#8b92a5;--acc:#7c5cff;--ok:#2ecc71;--err:#ff5c6c}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh;display:flex;justify-content:center;padding:24px}
+  main{width:100%;max-width:760px}
+  h1{font-size:22px;margin:0 0 4px}
+  p.sub{color:var(--mut);margin:0 0 20px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:14px}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  button{background:var(--acc);color:#fff;border:0;border-radius:10px;padding:10px 16px;font-size:15px;cursor:pointer;font-weight:600}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--txt)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button:hover:not(:disabled){filter:brightness(1.12)}
+  textarea{width:100%;height:84px;background:#0b0d12;color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:10px;font:12px/1.4 ui-monospace,Consolas,monospace;resize:vertical}
+  label{display:block;font-weight:600;margin:12px 0 6px}
+  .step{color:var(--mut);font-size:13px;margin:0 0 8px}
+  .pill{display:inline-block;padding:3px 10px;border-radius:99px;font-size:12px;font-weight:600;background:#262b38;color:var(--mut)}
+  .pill.ok{background:rgba(46,204,113,.15);color:var(--ok)}
+  .pill.err{background:rgba(255,92,108,.15);color:var(--err)}
+  .hide{display:none!important}
+  video{width:100%;max-height:78vh;background:#000;border-radius:12px;display:block}
+  .tip{font-size:13px;color:var(--mut);border-left:3px solid var(--acc);padding-left:10px;margin-top:10px}
+  .warn{color:#ffb454}
+  #unmute{position:absolute;inset:0;margin:auto;width:220px;height:48px}
+  .stage{position:relative}
+</style>
+</head>
+<body>
+<main>
+  <h1>🍿 Sessão de Cinema</h1>
+  <p class="sub">Compartilhe a tela direto com seu amigo. Sem conta, sem servidor, criptografado de ponta a ponta.</p>
+
+  <div class="card"><span id="status" class="pill">Aguardando</span></div>
+
+  <!-- ESCOLHA -->
+  <div id="choose" class="card">
+    <div class="row">
+      <button id="btnHost">📺 Vou transmitir o filme</button>
+      <button id="btnViewer" class="ghost">👀 Vou assistir</button>
+    </div>
+    <div class="tip">Dica: no Chrome ou Edge, ao escolher o que compartilhar, abra a aba <b>"Guia do Chrome"</b> e marque <b>"Compartilhar áudio da guia"</b>. Sem isso seu amigo vê o filme mas não escuta nada.</div>
+  </div>
+
+  <!-- HOST -->
+  <div id="hostPanel" class="card hide">
+    <p class="step"><b>Passo 1.</b> Copie este código e mande para seu amigo (WhatsApp, Telegram, onde quiser).</p>
+    <textarea id="offerOut" readonly placeholder="Gerando código..."></textarea>
+    <div class="row" style="margin-top:8px"><button id="copyOffer" class="ghost">Copiar código</button></div>
+    <label for="answerIn">Passo 2. Cole aqui a resposta que seu amigo te devolver</label>
+    <textarea id="answerIn" placeholder="Cole a resposta aqui"></textarea>
+    <div class="row" style="margin-top:8px"><button id="btnConnect">Conectar</button></div>
+    <p id="noAudio" class="tip warn hide">Atenção: você não marcou "Compartilhar áudio". Seu amigo vai ver a imagem, mas sem som. Pare e comece de novo se quiser áudio.</p>
+  </div>
+
+  <!-- HOST ao vivo -->
+  <div id="hostLive" class="card hide">
+    <p style="margin-top:0">🔴 <b>Você está transmitindo.</b> Volte para a aba do filme e dê play. Pode minimizar esta aba, mas não feche.</p>
+    <button id="btnStop" class="ghost">Parar transmissão</button>
+  </div>
+
+  <!-- VIEWER -->
+  <div id="viewerPanel" class="card hide">
+    <label for="offerIn" style="margin-top:0">Passo 1. Cole aqui o código que seu amigo mandou</label>
+    <textarea id="offerIn" placeholder="Cole o código aqui"></textarea>
+    <div class="row" style="margin-top:8px"><button id="btnAnswer">Gerar resposta</button></div>
+    <div id="answerBox" class="hide">
+      <label for="answerOut">Passo 2. Copie e mande esta resposta de volta</label>
+      <textarea id="answerOut" readonly></textarea>
+      <div class="row" style="margin-top:8px"><button id="copyAnswer" class="ghost">Copiar resposta</button></div>
+      <p class="step" style="margin-top:10px">Pronto. Assim que ele colar, o filme aparece aqui.</p>
+    </div>
+  </div>
+
+  <div id="stage" class="stage hide">
+    <video id="video" autoplay playsinline controls></video>
+    <button id="unmute" class="hide">🔊 Ativar som e assistir</button>
+  </div>
+</main>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const ICE = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' }
+  ];
+  let pc = null, stream = null;
+
+  /* ---------- utilidades ---------- */
+  function setStatus(text, kind) {
+    const s = $('status');
+    s.textContent = text;
+    s.className = 'pill' + (kind ? ' ' + kind : '');
+  }
+  const show = (id, on = true) => $(id).classList.toggle('hide', !on);
+
+  function toB64(bytes) {
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000)
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+  function fromB64(str) {
+    const bin = atob(str);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  async function pipe(bytes, stream) {
+    const s = new Blob([bytes]).stream().pipeThrough(stream);
+    return new Uint8Array(await new Response(s).arrayBuffer());
+  }
+
+  // Empacota a descrição SDP em um texto curto (deflate + base64)
+  async function pack(desc) {
+    let bytes = new TextEncoder().encode(JSON.stringify({ t: desc.type, s: desc.sdp }));
+    let prefix = 'R';
+    if ('CompressionStream' in window) {
+      bytes = await pipe(bytes, new CompressionStream('deflate'));
+      prefix = 'Z';
+    }
+    return prefix + toB64(bytes);
+  }
+  async function unpack(text) {
+    text = (text || '').replace(/\s+/g, '');
+    if (!text) throw new Error('Cole o código primeiro.');
+    const prefix = text[0];
+    let bytes = fromB64(text.slice(1));
+    if (prefix === 'Z') bytes = await pipe(bytes, new DecompressionStream('deflate'));
+    const o = JSON.parse(new TextDecoder().decode(bytes));
+    return { type: o.t, sdp: o.s };
+  }
+
+  // Espera o navegador terminar de descobrir os caminhos de rede
+  function waitIce(conn) {
+    return new Promise(resolve => {
+      if (conn.iceGatheringState === 'complete') return resolve();
+      const done = () => { conn.removeEventListener('icegatheringstatechange', check); resolve(); };
+      const check = () => { if (conn.iceGatheringState === 'complete') done(); };
+      conn.addEventListener('icegatheringstatechange', check);
+      setTimeout(done, 5000);
+    });
+  }
+
+  async function copy(textareaId, btn) {
+    const ta = $(textareaId);
+    try { await navigator.clipboard.writeText(ta.value); }
+    catch { ta.select(); document.execCommand('copy'); }
+    const old = btn.textContent;
+    btn.textContent = 'Copiado ✓';
+    setTimeout(() => btn.textContent = old, 1500);
+  }
+
+  function newPC() {
+    const conn = new RTCPeerConnection({ iceServers: ICE });
+    conn.onconnectionstatechange = () => {
+      const st = conn.connectionState;
+      if (st === 'connected') {
+        setStatus('Conectado 🔒', 'ok');
+        onConnected();
+      } else if (st === 'connecting') {
+        setStatus('Conectando...');
+      } else if (st === 'disconnected') {
+        setStatus('Conexão instável...', 'err');
+      } else if (st === 'failed') {
+        setStatus('Falhou. Recarregue a página e tente de novo.', 'err');
+      } else if (st === 'closed') {
+        setStatus('Encerrado');
+      }
+    };
+    return conn;
+  }
+
+  function onConnected() {
+    show('hostPanel', false);
+    show('viewerPanel', false);
+    if (stream) show('hostLive', true);
+  }
+
+  /* ---------- ANFITRIÃO (quem transmite) ---------- */
+  $('btnHost').onclick = async () => {
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 30 } },
+        audio: true
+      });
+    } catch (e) {
+      setStatus('Compartilhamento cancelado', 'err');
+      return;
+    }
+    show('choose', false);
+    show('hostPanel', true);
+    setStatus('Gerando código...');
+
+    show('noAudio', stream.getAudioTracks().length === 0);
+
+    pc = newPC();
+    stream.getTracks().forEach(t => {
+      if (t.kind === 'video') t.contentHint = 'motion'; // prioriza fluidez de vídeo
+      pc.addTrack(t, stream);
+    });
+    stream.getVideoTracks()[0].onended = stopAll;
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitIce(pc);
+    $('offerOut').value = await pack(pc.localDescription);
+    setStatus('Aguardando seu amigo');
+  };
+
+  $('copyOffer').onclick = e => copy('offerOut', e.target);
+
+  $('btnConnect').onclick = async () => {
+    try {
+      const answer = await unpack($('answerIn').value);
+      await pc.setRemoteDescription(answer);
+      setStatus('Conectando...');
+      // aumenta o teto de bitrate para a imagem ficar nítida
+      for (const sender of pc.getSenders()) {
+        if (sender.track && sender.track.kind === 'video') {
+          const p = sender.getParameters();
+          if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+          p.encodings[0].maxBitrate = 6_000_000;
+          await sender.setParameters(p).catch(() => {});
+        }
+      }
+    } catch (e) {
+      setStatus('Código inválido: ' + e.message, 'err');
+    }
+  };
+
+  function stopAll() {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (pc) pc.close();
+    stream = null;
+    show('hostLive', false);
+    show('hostPanel', false);
+    setStatus('Transmissão encerrada');
+    setTimeout(() => location.reload(), 1200);
+  }
+  $('btnStop').onclick = stopAll;
+
+  /* ---------- ESPECTADOR (quem assiste) ---------- */
+  $('btnViewer').onclick = () => {
+    show('choose', false);
+    show('viewerPanel', true);
+    setStatus('Aguardando código');
+  };
+
+  $('btnAnswer').onclick = async () => {
+    try {
+      const offer = await unpack($('offerIn').value);
+      pc = newPC();
+      pc.ontrack = e => {
+        const v = $('video');
+        if (v.srcObject !== e.streams[0]) v.srcObject = e.streams[0];
+        show('stage', true);
+        v.play().catch(() => {          // navegador bloqueou som automático
+          v.muted = true;
+          v.play();
+          show('unmute', true);
+        });
+      };
+      await pc.setRemoteDescription(offer);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      setStatus('Gerando resposta...');
+      await waitIce(pc);
+      $('answerOut').value = await pack(pc.localDescription);
+      show('answerBox', true);
+      setStatus('Mande a resposta para seu amigo');
+    } catch (e) {
+      setStatus('Código inválido: ' + e.message, 'err');
+    }
+  };
+
+  $('copyAnswer').onclick = e => copy('answerOut', e.target);
+
+  $('unmute').onclick = () => {
+    const v = $('video');
+    v.muted = false;
+    v.play();
+    show('unmute', false);
+  };
+})();
+</script>
+</body>
+</html>
